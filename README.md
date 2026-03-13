@@ -1,6 +1,5 @@
-Causal analyses using education-health linked data for England: a case study
 
-Exemplar analyses of simulated data inspired by ECHILD
+Exemplar analyses of simulated data inspired by ECHILD.
 
 This depository includes the simulated data and the Stata and R codes used in the paper entitled "Causal analyses using education-health linked data for England: a case study".
 
