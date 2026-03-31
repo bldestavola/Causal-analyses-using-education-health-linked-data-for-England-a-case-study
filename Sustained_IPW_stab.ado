@@ -2,16 +2,20 @@
 *********************************************************************************************************************************
 cap program drop Sustained_IPW_stab
 cap program define Sustained_IPW_stab, rclass
-args A1 A2 A3 A4 Y1 Y2 Y3 Y4 den1 den2 den3 den4
-
+args A Y den newid
 
 preserve
+cap drop p_num*
+cap drop p_den*
+cap drop sw*
+cap drop cumA*
+cap drop A_lag
+cap drop cumY
+cap drop cumden
 
-reshape long `Y' inter  Hosp `A' `den' SEN_lag1 Hosp_lag1 Y_lag1 SEN_lag2 Hosp_lag2 SEN_lag3 Hosp_lag3 cumden cumY
-ta `A'
-sort id t
-qui  by id: gen A_lag = `A'[_n-1]
 
+sort `newid' t
+qui  by `newid'(t): gen A_lag = `A'[_n-1]
 
 	
 * -------------------------------------------------------------
@@ -27,6 +31,7 @@ foreach t of numlist 1{
 	logit `A'   $base_conf                                         if t==`t', nolog
 	predict double p_den`t'                                        if t==`t'
 	
+*	twoway (kdensity p_den`t' if SEN==1 & t==`t', lcol(red)) (kdensity p_den`t' if SEN==0 & t==`t',lcol(blue)) , name(PS`t', replace) xtitle(PS) title("PS for time `t'")
 	replace p_num`t'=1-p_num`t'                                    if t==`t' & `A'==0
 	replace p_den`t'=1-p_den`t'                                    if t==`t' & `A'==0
 
@@ -36,13 +41,13 @@ foreach t of numlist 1{
 *t>1
 foreach t of numlist 2/3{
 	
-	logit `A' A_lag                                             if t==`t', nolog
+	logit `A' A_lag i.t                                            if t==`t', nolog
 	predict double p_num`t'                                        if t==`t'
 	
 	logit `A' A_lag  $tv_conf $base_conf                        if t==`t', nolog
 	predict double p_den`t'                                        if t==`t'
 	
-
+*	twoway (kdensity p_den`t' if SEN==1 & t==`t', lcol(red)) (kdensity p_den`t' if SEN==0 & t==`t',lcol(blue)) , name(PS`t', replace) xtitle(PS) title("PS for time `t'")
 	replace p_num`t'=1-p_num`t'                                    if t==`t' & `A'==0
 	replace p_den`t'=1-p_den`t'                                    if t==`t' & `A'==0
 
@@ -56,53 +61,69 @@ foreach t of numlist 1/3{
 }
 
 * -------------------------------------------------------------
-* 2. Build stabilized weight per row, then cumulative product per id
+* 2. Build stabilized weight per row, then cumulative product per newid
 * -------------------------------------------------------------
 
 * Per-time stabilized weight factor
-gen double sw_t = p_num / p_den
-*tabstat  p_num p_den sw_t , by(t) s(count mean min max) c(s)
+gen double lsw_t = log(p_num) - log(p_den)
 
-* Cumulative product across time for each subject (product of sw_t up to t)
-bys id (t): gen double sw = sw_t
-bys id: replace sw = sw[_n-1] * sw_t if _n>1
-*tabstat   sw , by(`A') s(count mean min max) c(s)
+tabstat  p_num p_den lsw_t , by(t) s(count mean min max) c(s)
 
+* Cumulative product across time for each subject (product of sw_t up to t on log scale to improve stability)
+bys `newid' (t): gen double lsw = lsw_t
+bys `newid': replace lsw = lsw[_n-1] + lsw_t if _n>1
+gen double sw = exp(lsw)
+
+* -------------------------------------------------------------
+* 3. Diagnostics: examine sw_final distribution, truncate if needed
+* -------------------------------------------------------------
+/* Inspect percentiles. If extreme weights, truncate at, e.g., 1st/99th or 0.01/99.99 */
+centile sw, centile(1 99)
+local p1 = r(c_1)
+local p99 = r(c_2)
+display "1st pctile = `p1', 99th pctile = `p99'"
+*/
+
+* Truncate example
+gen double sw_trim = sw if sw<.
+replace sw_trim = `p99' if sw_trim > `p99' & sw_trim<.
+replace sw_trim = `p1' if sw_trim < `p1' 
+centile sw_trim, centile(1 99)
 
 * ---------------------------------------------------------------------
-* 3. Create cumulative exposure and cumulative outcome and denominator
+* 4. Create cumulative exposure and cumulative outcome and denominator
 * ---------------------------------------------------------------------
-cap drop cumA
-cap drop cumY
-cap drop cumden
+ta `A'
+bys `newid' (t): gen cumA = `A'
+bys `newid': replace cumA = cumA[_n-1] + `A' if _n>1
+bys `newid' (t): gen cumA_lag = cumA[_n-1]
+ta t cumA_lag
 
-bys id (t): gen cumA = `A'
-bys id: replace cumA = cumA[_n-1] + `A' if _n>1
-bys id: gen cumA_lag = cumA[_n-1]
-bys id: gen sw_lag = sw[_n-1]
-
-
-
-bys id (t): gen cumY = `Y' if _n>1
-bys id: replace cumY = cumY[_n-1] + `Y' if _n>2
-
-bys id (t): gen cumden = `den' if _n>1
-bys id: replace cumden = cumden[_n-1] + `den' if _n>2
+bys `newid' (t): gen sw_lag = sw[_n-1]
+bys `newid' (t): gen sw_trim_lag = sw_trim[_n-1]
+tabstat sw_trim sw_trim_lag, by(t) s(count min max)
 
 
+bys `newid' (t): gen cumY = `Y' if _n>1
+bys `newid'  (t): replace cumY = cumY[_n-1] + `Y' if _n>2
+
+bys `newid' (t): gen cumden = `den' if _n>1
+bys `newid'  (t): replace cumden = cumden[_n-1] + `den' if _n>2
+
+*first record not needed anymore- note Y starts from Year 2 
 drop if t==1
 
 * -------------------------------------------------------------
-* 5. Fit the Marginal Structural Model (weighted)
+* 6. Fit the Marginal Structural Model (weighted)
 * -------------------------------------------------------------
 * Simple MSM: 
-poisson cumY cumA_lag i.t  [pw=sw_lag], e(cumden) vce(cluster id) nolog
+poisson cumY cumA_lag i.t  [pw=sw_trim_lag], e(cumden) vce(cluster `newid') nolog
 
 
 *more general MSM
-poisson cumY c.cumA_lag##c.cumA_lag A_lag i.t [pw=sw_lag], e(cumden) vce(cluster id) nolog
+poisson cumY c.cumA_lag##c.cumA_lag A_lag i.t  [pw=sw_trim_lag], e(cumden) vce(cluster `newid') nolog
 
-*results
+*results for Year 4
 	di "base rate at t=4"
 	nlcom exp(_b[_cons]+_b[4.t])
 	scalar rate_000=exp(_b[_cons]+_b[4.t])
