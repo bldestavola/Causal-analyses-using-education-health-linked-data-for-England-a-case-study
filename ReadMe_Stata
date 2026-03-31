@@ -139,4 +139,4 @@ TO PRODUCE THE RESULTS REPORTED IN TABLE 4 (sustained exposure)
 ############################################################################################################################
 
 Things here are more complicated and we wrote two commands, one for g-computation adn one for IPW estimation 
-called "Sustained_SEND-gcomp.ado" and "Sustained_SEND_Ipw.ado". See "Simulations_Table4_github.do".
+called "Sustained_SEND-gcomp.ado" and "Sustained_ipw_stab.ado". See "Simulations_Table4_github.do" and "Simulations_Table4_ipw_github.do".
